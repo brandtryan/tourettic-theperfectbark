@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPGPU Tourettics  Advection Playground</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #fff;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            box-shadow: 0 0 30px rgba(0,0,0,0.9);
+            width: 1000px;
+            height: 1000px;
+            background: #000;
+            display: none; /* Hidden until authenticated */
+        }
+
+        /* --- NEW AUTH STYLES --- */
+        #login-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #0f172a; /* matches Tailwind slate-900 */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .login-box {
+            background: #1e293b; /* matches Tailwind slate-800 */
+            padding: 40px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            text-align: center;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+        .login-box h1 { margin: 0 0 8px 0; font-size: 24px; font-weight: bold; }
+        .login-box p { color: #94a3b8; margin: 0 0 32px 0; font-size: 14px; }
+        .google-btn {
+            background: white; color: #0f172a;
+            border: none; padding: 12px 24px;
+            border-radius: 8px; font-weight: bold; font-size: 15px;
+            cursor: pointer; display: flex; align-items: center; gap: 12px;
+            width: 100%; justify-content: center; transition: background 0.2s;
+        }
+        .google-btn:hover { background: #f1f5f9; }
+        #logout-btn {
+            position: absolute; top: 20px; right: 20px;
+            background: #1e293b; color: #cbd5e1; border: 1px solid #334155;
+            padding: 8px 16px; border-radius: 6px; cursor: pointer;
+            z-index: 100; display: none; font-family: sans-serif; font-weight: bold;
+        }
+        #logout-btn:hover { background: #334155; color: white; }
+        
+        #error-msg {
+            display: none;
+            position: absolute;
+            top: 20px;
+            background: rgba(255, 50, 50, 0.8);
+            padding: 15px 25px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+    </style>
+    <!-- Include lil-gui for the UI -->
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19"></script>
+</head>
+<body>
+
+    <!-- --- NEW AUTH UI --- -->
+    <div id="login-screen">
+        <div class="login-box">
+            <h1>Buffer-Centric Reactor</h1>
+            <p>Private WebGL Playground</p>
+            <button id="google-login-btn" class="google-btn">
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" style="width: 20px; height: 20px;">
+                Sign in with Google
+            </button>
+        </div>
+    </div>
+    <button id="logout-btn">Logout</button>
+    <!-- ----------------------- -->
+
+    <div id="error-msg">Your device/browser does not support the required WebGL features for this GPGPU simulation.</div>
+    <canvas id="glcanvas" width="1000" height="1000"></canvas>
+
+<!-- Changed to type="module" so we can import Firebase directly from the browser -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
+// 1. Initialize Firebase (Using your exact config)
+const firebaseConfig = {
+    apiKey: "AIzaSyAavbEDhySJ0dWsdp-T5bvAEpK3gf_3hxc",
+    authDomain: "perfect-bark-grants.firebaseapp.com",
+    projectId: "perfect-bark-grants",
+    storageBucket: "perfect-bark-grants.firebasestorage.app",
+    messagingSenderId: "761272386452",
+    appId: "1:761272386452:web:4a10397fd364902e678581",
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+// 2. Auth UI Elements
+const loginScreen = document.getElementById('login-screen');
+const loginBtn = document.getElementById('google-login-btn');
+const logoutBtn = document.getElementById('logout-btn');
+const canvas = document.getElementById('glcanvas');
+
+// lil-gui attaches to the document root, we need to toggle it manually
+const hideGUI = () => { const dom = document.querySelector('.lil-gui.root'); if(dom) dom.style.display = 'none'; }
+const showGUI = () => { const dom = document.querySelector('.lil-gui.root'); if(dom) dom.style.display = 'block'; }
+
+// 3. Auth Handlers
+loginBtn.addEventListener('click', async () => {
+    try {
+        await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (err) {
+        console.error("Login Error:", err);
+    }
+});
+
+logoutBtn.addEventListener('click', () => signOut(auth));
+
+let isAppInitialized = false;
+
+// 4. Auth State Listener
+onAuthStateChanged(auth, (user) => {
+    if (user) {
+        // User is logged in! Hide login screen, show canvas & logout button
+        loginScreen.style.display = 'none';
+        logoutBtn.style.display = 'block';
+        canvas.style.display = 'block';
+        showGUI();
+        
+        // Only start the WebGL setup once
+        if (!isAppInitialized) {
+            initWebGLApp();
+            isAppInitialized = true;
+        }
+    } else {
+        // User is logged out. Show login screen, hide canvas & logout button
+        loginScreen.style.display = 'flex';
+        logoutBtn.style.display = 'none';
+        canvas.style.display = 'none';
+        hideGUI();
+    }
+});
+
+// We wrap your entire existing WebGL code inside this function
+function initWebGLApp() {
+
+// ==========================================
+// 1. SHARED GLSL MATH
+// ==========================================
+// We inject these mathematical functions into both our Simulation and Render shaders.
+const glslMath = `
+    uniform float u_time;
+    uniform float u_noiseScale;
+    uniform int u_octaves;
+    uniform float u_sdfRadius;
+
+    // --- NOISE ---
+    float hash(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
+    float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
+                   mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
+    }
+
+    float fbm(vec2 p) {
+        float value = 0.0;
+        float amplitude = 0.5;
+        // WebGL1 requires constant loop bounds
+        for (int i = 0; i < 8; i++) {
+            if(i >= u_octaves) break; 
+            value += amplitude * noise(p);
+            p *= 2.0;
+            amplitude *= 0.5;
+        }
+        return value;
+    }
+
+    float sdCircle(vec2 p, float r) {
+        return length(p) - r;
+    }
+
+    float sdBox(vec2 p, vec2 b) {
+        vec2 d = abs(p)-b;
+        return length(max(d,0.0)) + min(max(d.x,d.y),0.0);
+    }
+
+    // --- VECTOR FLOW FIELD (Curl Noise) ---
+    vec2 getFlowVector(vec2 p) {
+        float eps = 0.01;
+        float nX = fbm(p + vec2(eps, 0.0)) - fbm(p - vec2(eps, 0.0));
+        float nY = fbm(p + vec2(0.0, eps)) - fbm(p - vec2(0.0, eps));
+        // Rotating the gradient by 90 degrees creates "Curl Noise" (swirling flow)
+        return normalize(vec2(-nY, nX) + 0.0001); 
+    }
+
+    // Second flow field for interpolation
+    vec2 getFlowVector2(vec2 p) {
+        float eps = 0.01;
+        float nX = fbm(p + vec2(eps, 100.0)) - fbm(p - vec2(eps, 100.0));
+        float nY = fbm(p + vec2(100.0, eps)) - fbm(p - vec2(100.0, eps));
+        return normalize(vec2(-nY, nX) + 0.0001); 
+    }
+`;
+
+// ==========================================
+// 2. SHADERS
+// ==========================================
+
+// --- Background Shader (Draws the Noise & SDF) ---
+const bgVertexShader = `
+    attribute vec2 a_position;
+    varying vec2 v_uv;
+    void main() {
+        v_uv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+`;
+
+const bgFragmentShader = `
+    precision highp float;
+    varying vec2 v_uv;
+    
+    uniform bool u_showNoise;
+    uniform bool u_showSDF;
+    uniform int u_sdfShape;
+    uniform bool u_trails;
+    
+    ${glslMath}
+
+    void main() {
+        vec2 uv = (v_uv - 0.5) * 2.0; // -1 to 1
+        vec3 color = vec3(0.0);
+
+        // Calculate Noise
+        float n = fbm(uv * u_noiseScale + (u_time * 0.1));
+
+        // Calculate SDF based on shape selection
+        float d = 0.0;
+        if (u_sdfShape == 0) {
+            d = sdCircle(uv, u_sdfRadius) + (n * 0.2);
+        } else if (u_sdfShape == 1) {
+            d = sdBox(uv, vec2(u_sdfRadius)) + (n * 0.2);
+        }
+
+        float sdfLine = smoothstep(0.015, 0.0, abs(d)); 
+        float sdfMask = smoothstep(0.01, 0.0, d);
+
+        if (u_showNoise) {
+            color += vec3(n) * 0.15; // Dim background noise
+        }
+        
+        if (u_showSDF) {
+            color = mix(color, vec3(0.1, 0.5, 1.0), sdfLine); // Blue outline
+            color -= sdfMask * 0.1; // Darken inside the SDF
+        }
+
+        // If trails are enabled, fade the background to black
+        if (u_trails) {
+            gl_FragColor = vec4(0.0, 0.0, 0.0, 0.05); // low alpha for fading trails
+        } else {
+            gl_FragColor = vec4(color, 1.0);
+        }
+    }
+`;
+
+// --- GPGPU Simulation Shader (Updates Particle Positions) ---
+const simVertexShader = `
+    attribute vec2 a_position;
+    varying vec2 v_uv;
+    void main() {
+        v_uv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+`;
+
+const simFragmentShader = `
+    precision highp float;
+    varying vec2 v_uv;
+    
+    uniform sampler2D u_positions; // Reads the old coordinates from a texture
+    uniform float u_speed;
+    uniform float u_avoidSDFForce;
+    
+    uniform bool u_mouseActive;
+    uniform vec2 u_mouse;
+    uniform int u_sdfShape;
+    uniform bool u_multiFlow;
+    
+    ${glslMath}
+
+    void main() {
+        // 1. Read the particle's current position (stored as 0.0 to 1.0)
+        vec2 pos = texture2D(u_positions, v_uv).xy;
+        
+        // 2. Map position to canvas space (-1.0 to 1.0) for math
+        vec2 uv = pos * 2.0 - 1.0; 
+
+        // 3. Sample the Vector Flow Field
+        vec2 flowUV = uv * u_noiseScale + (u_time * 0.1);
+        vec2 velocity = getFlowVector(flowUV);
+
+        if (u_multiFlow) {
+            vec2 flowUV2 = uv * (u_noiseScale * 0.5) - (u_time * 0.05);
+            vec2 velocity2 = getFlowVector2(flowUV2);
+            velocity = mix(velocity, velocity2, 0.5); // Blend two noise fields
+        }
+
+        // 4. Calculate SDF Avoidance
+        float d = 0.0;
+        if (u_sdfShape == 0) {
+            d = sdCircle(uv, u_sdfRadius);
+        } else if (u_sdfShape == 1) {
+            d = sdBox(uv, vec2(u_sdfRadius));
+        }
+
+        if (d < 0.1) {
+            // Calculate the gradient (normal) of the SDF to know which way to push
+            vec2 eps = vec2(0.01, 0.0);
+            vec2 normal;
+            if (u_sdfShape == 0) {
+                normal = normalize(vec2(
+                    sdCircle(uv + eps.xy, u_sdfRadius) - sdCircle(uv - eps.xy, u_sdfRadius),
+                    sdCircle(uv + eps.yx, u_sdfRadius) - sdCircle(uv - eps.yx, u_sdfRadius)
+                ));
+            } else {
+                normal = normalize(vec2(
+                    sdBox(uv + eps.xy, vec2(u_sdfRadius)) - sdBox(uv - eps.xy, vec2(u_sdfRadius)),
+                    sdBox(uv + eps.yx, vec2(u_sdfRadius)) - sdBox(uv - eps.yx, vec2(u_sdfRadius))
+                ));
+            }
+            // Push particles away from the SDF boundary
+            velocity += normal * (0.1 - d) * u_avoidSDFForce;
+        }
+
+        // 4.5 Mouse Interaction Force
+        if (u_mouseActive) {
+            vec2 dir = uv - u_mouse;
+            float dist = length(dir);
+            if (dist < 0.3) {
+                velocity += normalize(dir) * (0.3 - dist) * 10.0; // Repel from mouse
+            }
+        }
+
+        // 5. Advect (Euler integration): New Position = Old Position + Velocity * Time
+        // We multiply speed by 0.001 to keep the UI slider ranges reasonable
+        vec2 newPos = pos + (velocity * u_speed * 0.001);
+
+        // 6. Wrap around edges (keep between 0.0 and 1.0)
+        newPos = fract(newPos);
+
+        // 7. Save the new position back out as a color (R, G, B, A)
+        // Store velocity in Z/W for the render shader!
+        gl_FragColor = vec4(newPos, velocity.x, velocity.y);
+    }
+`;
+
+// --- Particle Render Shader (Draws the actual dots) ---
+const renderVertexShader = `
+    attribute vec2 a_puv; // The UV coordinate to look up this specific particle in the data texture
+    
+    uniform sampler2D u_positions;
+    
+    varying vec2 v_pos;
+    varying vec2 v_vel;
+    
+    void main() {
+        // Fetch the position from the texture (Vertex Texture Fetch)
+        vec4 posData = texture2D(u_positions, a_puv);
+        vec2 pos = posData.xy;
+        v_vel = posData.zw; // Read velocity stored in ZW channels
+        
+        // Map from 0..1 back to clip space -1..1
+        gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+        gl_PointSize = 2.0; 
+        
+        v_pos = pos; // Pass to fragment shader for coloring
+    }
+`;
+
+const renderFragmentShader = `
+    precision mediump float;
+    
+    varying vec2 v_pos;
+    varying vec2 v_vel;
+    
+    uniform vec3 u_color;
+    uniform float u_opacity;
+    uniform bool u_velColors;
+
+    void main() {
+        // Make the points circular instead of square
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        if (length(coord) > 0.5) discard;
+
+        vec3 finalColor = u_color;
+        
+        if (u_velColors) {
+            // Speed normally hovers near 1.0. It spikes when hitting SDF/Mouse forces
+            float speed = length(v_vel);
+            vec3 coldColor = vec3(0.1, 0.3, 1.0); // Blue for slow/normal
+            vec3 hotColor = vec3(1.0, 0.2, 0.5);  // Pink for fast/repelled
+            finalColor = mix(coldColor, hotColor, clamp((speed - 1.0) * 2.0, 0.0, 1.0));
+        } else {
+            // Default position-based color variation
+            finalColor += vec3(v_pos.x * 0.2, v_pos.y * 0.2, 0.0);
+        }
+
+        gl_FragColor = vec4(finalColor, u_opacity);
+    }
+`;
+
+// ==========================================
+// 3. WEBGL SETUP & HELPERS
+// ==========================================
+const canvas = document.getElementById('glcanvas');
+const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); // Important for trails
+
+// Check for required GPGPU Extensions
+// 1. Float textures to store precise coordinates.
+// 2. Vertex Texture Fetch (VTF) to read textures in the vertex shader.
+if (!gl.getExtension('OES_texture_float') || gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) === 0) {
+    document.getElementById('error-msg').style.display = 'block';
+}
+
+function createShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error("Shader Compile Error:", gl.getShaderInfoLog(shader), source);
+        return null;
+    }
+    return shader;
+}
+
+function createProgram(gl, vsSource, fsSource) {
+    const p = gl.createProgram();
+    gl.attachShader(p, createShader(gl, gl.VERTEX_SHADER, vsSource));
+    gl.attachShader(p, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
+    gl.linkProgram(p);
+    return p;
+}
+
+// Compile all three programs
+const bgProgram = createProgram(gl, bgVertexShader, bgFragmentShader);
+const simProgram = createProgram(gl, simVertexShader, simFragmentShader);
+const renderProgram = createProgram(gl, renderVertexShader, renderFragmentShader);
+
+// Create a full-screen quad buffer (used by Background and Simulation)
+const quadBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1,-1,  1,-1,  -1,1,
+    -1,1,   1,-1,   1,1
+]), gl.STATIC_DRAW);
+
+// ==========================================
+// 4. GPGPU DATA STRUCTURES
+// ==========================================
+// A 256x256 texture holds exactly 65,536 particles
+const PARTICLE_TEX_SIZE = 256; 
+const particleCount = PARTICLE_TEX_SIZE * PARTICLE_TEX_SIZE;
+
+// 1. Create Initial Data array (Random positions)
+const initialPositions = new Float32Array(particleCount * 4); // RGBA format
+for (let i = 0; i < particleCount; i++) {
+    initialPositions[i * 4 + 0] = Math.random(); // X pos (R)
+    initialPositions[i * 4 + 1] = Math.random(); // Y pos (G)
+    initialPositions[i * 4 + 2] = 0.0;           // (B) unused
+    initialPositions[i * 4 + 3] = 1.0;           // (A) unused
+}
+
+// 2. Helper to create a texture/framebuffer pair
+function createFBO(data) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // Write the float data to the texture
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, PARTICLE_TEX_SIZE, PARTICLE_TEX_SIZE, 0, gl.RGBA, gl.FLOAT, data);
+
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    
+    return { tex, fbo };
+}
+
+// 3. Create Ping-Pong Buffers
+let ping = createFBO(initialPositions); // FBO A
+let pong = createFBO(null);             // FBO B (Empty initially)
+
+// 4. Create Particle UV Buffer 
+// (Tells each vertex exactly which pixel to read from the texture)
+const particleUVs = new Float32Array(particleCount * 2);
+let i = 0;
+for (let y = 0; y < PARTICLE_TEX_SIZE; y++) {
+    for (let x = 0; x < PARTICLE_TEX_SIZE; x++) {
+        // Store the normalized coordinates (0.0 to 1.0)
+        particleUVs[i++] = (x + 0.5) / PARTICLE_TEX_SIZE; 
+        particleUVs[i++] = (y + 0.5) / PARTICLE_TEX_SIZE;
+    }
+}
+const uvBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+gl.bufferData(gl.ARRAY_BUFFER, particleUVs, gl.STATIC_DRAW);
+
+// ==========================================
+// 5. UI & STATE
+// ==========================================
+const state = {
+    showNoise: true,
+    showSDF: true,
+    advectionSpeed: 3.0,
+    noiseScale: 3.5,
+    octaves: 4,
+    sdfRadius: 0.4,
+    avoidSDFForce: 15.0,
+    particleColor: [255, 100, 200], // RGB array for lil-gui
+    particleOpacity: 0.6,
+    
+    // New Features State
+    mouseActive: false,
+    velColors: false,
+    sdfShape: 0, // 0 = Circle, 1 = Box
+    trails: false,
+    multiFlow: false
+};
+
+let mouseX = 0.0;
+let mouseY = 0.0;
+
+// Track mouse position mapped to -1.0 to 1.0
+canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = ((e.clientX - rect.left) / canvas.width) * 2.0 - 1.0;
+    mouseY = -(((e.clientY - rect.top) / canvas.height) * 2.0 - 1.0);
+});
+
+// Keyboard Shortcuts Logic
+window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.altKey) {
+        switch(e.key) {
+            case '1': state.mouseActive = !state.mouseActive; break;
+            case '2': state.velColors = !state.velColors; break;
+            case '3': state.sdfShape = state.sdfShape === 0 ? 1 : 0; break;
+            case '4': 
+                state.trails = !state.trails; 
+                // Auto-disable background noise/SDF when trails are on for best effect
+                if(state.trails) {
+                    state.showNoise = false;
+                    state.showSDF = false;
+                }
+                break;
+            case '5': state.multiFlow = !state.multiFlow; break;
+            default: return; // Do nothing if not 1-5
+        }
+        // Update UI panels to match
+        gui.controllersRecursive().forEach(c => c.updateDisplay());
+        showToast(`Activated: Ctrl+Alt+${e.key}`);
+    }
+});
+
+// Simple toast notification system
+function showToast(msg) {
+    let toast = document.getElementById('toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toast';
+        toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.9);color:#000;padding:10px 20px;border-radius:20px;font-weight:bold;z-index:1000;transition:opacity 0.3s; pointer-events:none; box-shadow: 0 4px 10px rgba(0,0,0,0.5);';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.opacity = 1;
+    setTimeout(() => toast.style.opacity = 0, 1500);
+}
+
+const gui = new lil.GUI({ title: 'Advection Playground' });
+
+const viewFolder = gui.addFolder('Visibility');
+viewFolder.add(state, 'showNoise').name('Background Noise');
+viewFolder.add(state, 'showSDF').name('Show SDF Border');
+viewFolder.add(state, 'trails').name('[4] Trails (Ctrl+Alt+4)');
+
+const simFolder = gui.addFolder('Flow Simulation');
+simFolder.add(state, 'advectionSpeed', 0.0, 10.0).name('Particle Speed');
+simFolder.add(state, 'noiseScale', 0.5, 10.0).name('Noise Scale');
+simFolder.add(state, 'octaves', 1, 8, 1).name('Noise Detail (Octaves)');
+simFolder.add(state, 'multiFlow').name('[5] Multi-Flow (Ctrl+Alt+5)');
+
+const sdfFolder = gui.addFolder('Signed Distance Field');
+sdfFolder.add(state, 'sdfShape', { Circle: 0, Box: 1 }).name('[3] Shape (Ctrl+Alt+3)');
+sdfFolder.add(state, 'sdfRadius', 0.1, 1.0).name('Radius');
+sdfFolder.add(state, 'avoidSDFForce', 0.0, 50.0).name('Repulsion Force');
+
+const particleFolder = gui.addFolder('Particles (65k)');
+particleFolder.addColor(state, 'particleColor').name('Color');
+particleFolder.add(state, 'particleOpacity', 0.01, 1.0).name('Opacity');
+particleFolder.add(state, 'velColors').name('[2] Vel Colors (Ctrl+Alt+2)');
+particleFolder.add(state, 'mouseActive').name('[1] Mouse Repel (Ctrl+Alt+1)');
+
+// Helper to set shared uniforms across programs
+function setSharedUniforms(program, time) {
+    gl.uniform1f(gl.getUniformLocation(program, "u_time"), time * 0.001);
+    gl.uniform1f(gl.getUniformLocation(program, "u_noiseScale"), state.noiseScale);
+    gl.uniform1i(gl.getUniformLocation(program, "u_octaves"), state.octaves);
+    gl.uniform1f(gl.getUniformLocation(program, "u_sdfRadius"), state.sdfRadius);
+}
+
+// ==========================================
+// 6. RENDER LOOP
+// ==========================================
+function render(time) {
+    // --- PASS 1: SIMULATION (Update positions) ---
+    gl.useProgram(simProgram);
+    
+    // Bind the output to 'pong' FBO
+    gl.bindFramebuffer(gl.FRAMEBUFFER, pong.fbo);
+    gl.viewport(0, 0, PARTICLE_TEX_SIZE, PARTICLE_TEX_SIZE);
+    
+    // Bind the quad geometry
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+    const posLocSim = gl.getAttribLocation(simProgram, "a_position");
+    gl.enableVertexAttribArray(posLocSim);
+    gl.vertexAttribPointer(posLocSim, 2, gl.FLOAT, false, 0, 0);
+
+    // Read from 'ping' Texture
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, ping.tex);
+    gl.uniform1i(gl.getUniformLocation(simProgram, "u_positions"), 0);
+
+    setSharedUniforms(simProgram, time);
+    gl.uniform1f(gl.getUniformLocation(simProgram, "u_speed"), state.advectionSpeed);
+    gl.uniform1f(gl.getUniformLocation(simProgram, "u_avoidSDFForce"), state.avoidSDFForce);
+    
+    // Inject new Feature variables
+    gl.uniform1i(gl.getUniformLocation(simProgram, "u_mouseActive"), state.mouseActive);
+    gl.uniform2f(gl.getUniformLocation(simProgram, "u_mouse"), mouseX, mouseY);
+    gl.uniform1i(gl.getUniformLocation(simProgram, "u_sdfShape"), state.sdfShape);
+    gl.uniform1i(gl.getUniformLocation(simProgram, "u_multiFlow"), state.multiFlow);
+
+    // Crunch the math
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    // --- PASS 2: RENDER BACKGROUND ---
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Draw to actual canvas
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    
+    // Feature 4: Trails logic overrides standard clear operations
+    if (state.trails) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    } else {
+        gl.disable(gl.BLEND);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    
+    gl.useProgram(bgProgram);
+    const posLocBg = gl.getAttribLocation(bgProgram, "a_position");
+    gl.enableVertexAttribArray(posLocBg);
+    gl.vertexAttribPointer(posLocBg, 2, gl.FLOAT, false, 0, 0);
+
+    setSharedUniforms(bgProgram, time);
+    gl.uniform1i(gl.getUniformLocation(bgProgram, "u_showNoise"), state.showNoise);
+    gl.uniform1i(gl.getUniformLocation(bgProgram, "u_showSDF"), state.showSDF);
+    gl.uniform1i(gl.getUniformLocation(bgProgram, "u_sdfShape"), state.sdfShape);
+    gl.uniform1i(gl.getUniformLocation(bgProgram, "u_trails"), state.trails);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    // --- PASS 3: RENDER PARTICLES ---
+    gl.useProgram(renderProgram);
+    
+    // Enable Additive Blending so overlapping particles glow
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+    // Bind the Particle UV mapping buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+    const puvLoc = gl.getAttribLocation(renderProgram, "a_puv");
+    gl.enableVertexAttribArray(puvLoc);
+    gl.vertexAttribPointer(puvLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Read from 'pong' Texture (the newly calculated positions)
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, pong.tex);
+    gl.uniform1i(gl.getUniformLocation(renderProgram, "u_positions"), 0);
+
+    gl.uniform3f(gl.getUniformLocation(renderProgram, "u_color"), state.particleColor[0]/255, state.particleColor[1]/255, state.particleColor[2]/255);
+    gl.uniform1f(gl.getUniformLocation(renderProgram, "u_opacity"), state.particleOpacity);
+    gl.uniform1i(gl.getUniformLocation(renderProgram, "u_velColors"), state.velColors); // Inject Velocity Colors
+
+    // Draw 65,536 points
+    gl.drawArrays(gl.POINTS, 0, particleCount);
+
+    gl.disable(gl.BLEND);
+
+    // --- PING PONG SWAP ---
+    // Make the new positions the old positions for the next frame
+    let temp = ping;
+    ping = pong;
+    pong = temp;
+
+    requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+
+} // End of initWebGLApp()
+</script>
+</body>
+</html>
